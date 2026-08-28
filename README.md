@@ -28,9 +28,6 @@ ln -s "$PWD/audio-route" ~/.local/bin/audio-route
 audio-route status                  # now callable from anywhere
 ```
 
-The script resolves symlinks before locating `audiodev.swift`, so the shim
-still finds the CoreAudio helper next to the real script.
-
 Routing "output" to bare BlackHole would silence your speakers, so `audio-route`
 picks a **Multi-Output Device** that includes BlackHole (create one in
 **Audio MIDI Setup → + → Create Multi-Output Device**, tick BlackHole and your
