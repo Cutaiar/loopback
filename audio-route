@@ -3,17 +3,22 @@
 # audio-route — point macOS at BlackHole so Hyperspace can see system audio,
 #               and put everything back exactly as it was.
 #
-#   audio-route on        snapshot the current devices, then route through
-#                         BlackHole: output to the Multi-Output Device,
-#                         input to BlackHole itself
-#   audio-route off       restore the snapshot and discard it
-#   audio-route status    what is selected now, and whether a snapshot is held
+#   audio-route on          snapshot the current devices, then route through
+#                           BlackHole: output to a Multi-Output Device (so you
+#                           still hear the audio), input to BlackHole itself.
+#   audio-route on --bare   as above but route output to bare BlackHole 2ch,
+#                           silencing the speakers. Use this when another app
+#                           processes the BlackHole feed and plays back the
+#                           result itself — otherwise you'd hear the dry
+#                           signal on top of the processed one.
+#   audio-route off         restore the snapshot and discard it.
+#   audio-route status      what is selected now, and whether a snapshot is held.
 #
 # The snapshot is taken *before* anything changes and stores device UIDs, not
 # names, so a renamed device still restores. `on` twice does not overwrite the
 # snapshot — the first one is the state you actually want back.
 #
-# Override the auto-detected targets with HYPERSPACE_OUTPUT / HYPERSPACE_INPUT
+# Override the auto-detected targets with LOOPBACK_OUTPUT / LOOPBACK_INPUT
 # (a UID, an exact name, or any substring of a name).
 
 set -euo pipefail
@@ -31,10 +36,12 @@ while [[ -L "$SELF" ]]; do
 done
 HERE="$(cd "$(dirname "$SELF")" && pwd)"
 SRC="$HERE/audiodev.swift"
-CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/hyperspace"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/loopback"
 BIN="$CACHE/audiodev"
-STATE="${XDG_STATE_HOME:-$HOME/.local/state}/hyperspace"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/loopback"
 SNAP="$STATE/audio-snapshot"
+
+BARE=0   # set by --bare on the "on" command
 
 die() { printf 'audio-route: %s\n' "$1" >&2; exit "${2:-1}"; }
 
@@ -57,20 +64,26 @@ uid_of()  { cut -f1  <<<"$1"; }
 # stop hearing anything, which is never what someone wants.
 pick_output() {
   local list; list="$("$BIN" list out)"
-  if [[ -n "${HYPERSPACE_OUTPUT:-}" ]]; then printf '%s\n' "$HYPERSPACE_OUTPUT"; return; fi
+  if [[ -n "${LOOPBACK_OUTPUT:-}" ]]; then printf '%s\n' "$LOOPBACK_OUTPUT"; return; fi
   local multi bare
-  multi="$(grep -i 'blackhole' <<<"$list" | grep -iv $'\t''blackhole [0-9]*ch$' | head -1 || true)"
-  if [[ -n "$multi" ]]; then uid_of "$multi"; return; fi
-  bare="$(grep -i 'blackhole' <<<"$list" | head -1 || true)"
+  bare="$(grep -i 'blackhole' <<<"$list" | grep -i $'\t''blackhole [0-9]*ch$' | head -1 || true)"
+  # --bare skips the Multi-Output search: caller wants the audio to go into
+  # BlackHole only, because another program will process it and play back.
+  if (( BARE == 0 )); then
+    multi="$(grep -i 'blackhole' <<<"$list" | grep -iv $'\t''blackhole [0-9]*ch$' | head -1 || true)"
+    if [[ -n "$multi" ]]; then uid_of "$multi"; return; fi
+  fi
   [[ -n "$bare" ]] || die "no BlackHole output device found. Install it with: brew install blackhole-2ch" 2
-  printf 'audio-route: no Multi-Output Device found, using "%s" directly — you will not hear the audio.\n' \
-    "$(name_of "$bare")" >&2
-  printf 'audio-route: make one in Audio MIDI Setup (+ > Create Multi-Output Device, tick BlackHole and your speakers).\n' >&2
+  if (( BARE == 0 )); then
+    printf 'audio-route: no Multi-Output Device found, using "%s" directly — you will not hear the audio.\n' \
+      "$(name_of "$bare")" >&2
+    printf 'audio-route: make one in Audio MIDI Setup (+ > Create Multi-Output Device, tick BlackHole and your speakers).\n' >&2
+  fi
   uid_of "$bare"
 }
 
 pick_input() {
-  if [[ -n "${HYPERSPACE_INPUT:-}" ]]; then printf '%s\n' "$HYPERSPACE_INPUT"; return; fi
+  if [[ -n "${LOOPBACK_INPUT:-}" ]]; then printf '%s\n' "$LOOPBACK_INPUT"; return; fi
   local bh; bh="$("$BIN" list in | grep -i 'blackhole' | head -1 || true)"
   [[ -n "$bh" ]] || die "no BlackHole input device found. Install it with: brew install blackhole-2ch" 2
   uid_of "$bh"
@@ -136,14 +149,25 @@ cmd_status() {
   fi
 }
 
-case "${1:-status}" in
+CMD="${1:-status}"
+case "$CMD" in
   -h|--help|help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "${BASH_SOURCE[0]}"; exit 0 ;;
   on|off|restore|status) ;;
-  *)              die "unknown command \"$1\" — try on, off or status." ;;
+  *)              die "unknown command \"$CMD\" — try on, off or status." ;;
 esac
+shift || true
+
+# only `on` accepts flags; be strict so typos on other commands are caught
+while (( $# > 0 )); do
+  case "$1" in
+    --bare) [[ "$CMD" == on ]] || die "--bare only applies to \"on\""; BARE=1 ;;
+    *)      die "unknown option \"$1\"" ;;
+  esac
+  shift
+done
 
 build
-case "${1:-status}" in
+case "$CMD" in
   on)          cmd_on ;;
   off|restore) cmd_off ;;
   status)      cmd_status ;;
