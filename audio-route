@@ -18,7 +18,18 @@
 
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# resolve symlinks so a $PATH shim (e.g. ~/.local/bin/audio-route -> the real
+# script in loopback/) still finds audiodev.swift beside the source, not
+# beside the symlink
+SELF="${BASH_SOURCE[0]}"
+while [[ -L "$SELF" ]]; do
+  link="$(readlink "$SELF")"
+  case "$link" in
+    /*) SELF="$link" ;;
+    *)  SELF="$(dirname "$SELF")/$link" ;;
+  esac
+done
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
 SRC="$HERE/audiodev.swift"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/hyperspace"
 BIN="$CACHE/audiodev"
