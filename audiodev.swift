@@ -8,6 +8,11 @@
 //   audiodev get  in|out         uid<TAB>name of the current default
 //   audiodev set  in|out <spec>  spec is a device UID, or an exact name,
 //                                or a case-insensitive substring of one
+//   audiodev subs <spec>         uid<TAB>name of each sub-device of an
+//                                aggregate; nothing for a plain device
+//   audiodev make-multi <name> <main> <extra>
+//                                create a Multi-Output Device: <main> and
+//                                <extra> stacked, clocked to <main>
 //
 // Exit 0 on success, 1 on a bad argument, 2 when a device cannot be found or
 // the set is refused by CoreAudio.
@@ -95,28 +100,77 @@ func resolve(_ spec: String, input: Bool) -> AudioDeviceID? {
   return pool.first { name($0).lowercased().contains(needle) }
 }
 
+// Sub-device UIDs of an aggregate. A Multi-Output Device is a "stacked"
+// aggregate, so this is how you learn which BlackHole it actually feeds.
+// A plain device has no such property and yields an empty list.
+func subDevices(_ id: AudioDeviceID) -> [String] {
+  var a = addr(kAudioAggregateDevicePropertyFullSubDeviceList)
+  var size = UInt32(MemoryLayout<CFArray?>.size)
+  var cf: CFArray? = nil
+  let st = withUnsafeMutablePointer(to: &cf) {
+    $0.withMemoryRebound(to: UInt8.self, capacity: Int(size)) {
+      AudioObjectGetPropertyData(id, &a, 0, nil, &size, $0)
+    }
+  }
+  guard st == noErr, let uids = cf as? [String] else { return [] }
+  return uids
+}
+
 func die(_ msg: String, _ code: Int32) -> Never {
   FileHandle.standardError.write(("audiodev: " + msg + "\n").data(using: .utf8)!)
   exit(code)
 }
 
-let args = Array(CommandLine.arguments.dropFirst())
-guard args.count >= 2, ["list", "get", "set"].contains(args[0]),
-      ["in", "out"].contains(args[1]) else {
-  die("usage: audiodev list|get|set in|out [device]", 1)
+func usage() -> Never {
+  die("usage: audiodev list|get|set in|out [device] | subs <device> | make-multi <name> <main> <extra>", 1)
 }
-let isInput = args[1] == "in"
 
-switch args[0] {
-case "list":
-  for d in devices(input: isInput) { print(uid(d) + "\t" + name(d)) }
-case "get":
-  let d = defaultDevice(input: isInput)
-  guard d != 0 else { die("no default \(args[1])put device", 2) }
-  print(uid(d) + "\t" + name(d))
+let args = Array(CommandLine.arguments.dropFirst())
+guard let cmd = args.first else { usage() }
+
+switch cmd {
+case "list", "get", "set":
+  guard args.count >= 2, ["in", "out"].contains(args[1]) else { usage() }
+  let isInput = args[1] == "in"
+  switch cmd {
+  case "list":
+    for d in devices(input: isInput) { print(uid(d) + "\t" + name(d)) }
+  case "get":
+    let d = defaultDevice(input: isInput)
+    guard d != 0 else { die("no default \(args[1])put device", 2) }
+    print(uid(d) + "\t" + name(d))
+  default:
+    guard args.count >= 3 else { die("set needs a device", 1) }
+    guard let d = resolve(args[2], input: isInput) else { die("no \(args[1])put device matching \"\(args[2])\"", 2) }
+    guard setDefault(input: isInput, d) else { die("CoreAudio refused to make \"\(name(d))\" the default", 2) }
+    print(uid(d) + "\t" + name(d))
+  }
+case "subs":
+  guard args.count == 2 else { usage() }
+  guard let d = resolve(args[1], input: false) else { die("no output device matching \"\(args[1])\"", 2) }
+  let byUID = Dictionary(allDevices().map { (uid($0), $0) }, uniquingKeysWith: { a, _ in a })
+  for u in subDevices(d) { print(u + "\t" + (byUID[u].map(name) ?? "")) }
+case "make-multi":
+  guard args.count == 4 else { usage() }
+  guard let main  = resolve(args[2], input: false) else { die("no output device matching \"\(args[2])\"", 2) }
+  guard let extra = resolve(args[3], input: false) else { die("no output device matching \"\(args[3])\"", 2) }
+  // String keys mirror kAudioAggregateDevice*Key / kAudioSubDevice*Key.
+  // "stacked" is what makes this a Multi-Output Device rather than a plain
+  // aggregate; "drift" resamples the extra device against the main clock.
+  // Public (not "private"), so it persists and shows in Audio MIDI Setup.
+  let desc: [String: Any] = [
+    "name": args[1],
+    "uid": "loopback-multi-" + UUID().uuidString,
+    "stacked": 1,
+    "private": 0,
+    "master": uid(main),
+    "subdevices": [["uid": uid(main)], ["uid": uid(extra), "drift": 1]],
+  ]
+  var agg = AudioObjectID(0)
+  guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &agg) == noErr else {
+    die("CoreAudio refused to create \"\(args[1])\"", 2)
+  }
+  print(uid(agg) + "\t" + name(agg))
 default:
-  guard args.count >= 3 else { die("set needs a device", 1) }
-  guard let d = resolve(args[2], input: isInput) else { die("no \(args[1])put device matching \"\(args[2])\"", 2) }
-  guard setDefault(input: isInput, d) else { die("CoreAudio refused to make \"\(name(d))\" the default", 2) }
-  print(uid(d) + "\t" + name(d))
+  usage()
 }

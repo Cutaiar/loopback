@@ -31,9 +31,14 @@ audio-route status                  # now callable from anywhere
 ### Two modes: passthrough vs. processed
 
 By default, `audio-route on` picks a **Multi-Output Device** that includes
-BlackHole (create one in **Audio MIDI Setup → + → Create Multi-Output Device**,
-tick BlackHole and your speakers). Your speakers keep playing while BlackHole
-receives the same stream — right for visualizers, recorders, meters.
+BlackHole. Your speakers keep playing while BlackHole receives the same
+stream — right for visualizers, recorders, meters.
+
+If no such device exists yet, an interactive `on` offers to create one for you
+(your current output + BlackHole, the same stacked device you would build in
+**Audio MIDI Setup → + → Create Multi-Output Device**). It persists across
+reboots and shows up in Audio MIDI Setup like a hand-made one. Scripted runs
+never prompt — they warn and fall back to bare BlackHole.
 
 If another program is going to *process* the BlackHole feed and play the result
 back to your speakers (a reverb, an EQ, a pitch shifter), the multi-output is
@@ -58,6 +63,10 @@ LOOPBACK_INPUT="BlackHole 16ch" audio-route on
 
 The snapshot stores device UIDs, not names, so a renamed device still restores.
 A second `on` keeps the first snapshot — the state you actually want back.
+
+The input is matched to the BlackHole the output actually feeds — with both
+2ch and 16ch installed, "any BlackHole" can pick the one nothing is being
+routed into, and whatever reads it records silence.
 
 `audiodev.swift` is the small CoreAudio helper the script shells out to; it
 compiles once into `~/.cache/loopback/audiodev` and is reused.
